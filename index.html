@@ -137,7 +137,6 @@ var TRUCK_NAME_KEY = 'driverTruckName_v1';
 var PROPS = {
   appName: window.localStorage.getItem(TRUCK_NAME_KEY) || 'My Truck',
   weekStartsOn: 'Monday',       // 'Monday' | 'Sunday'
-  requireBookingNumber: true,
 };
 
 function editTruckName() {
@@ -248,8 +247,8 @@ function resetForm() {
 
 function saveEntry() {
   var f = state.form;
-  if (!f.date || !f.orderNumber || (PROPS.requireBookingNumber && !f.bookingNumber)) {
-    window.alert('Please fill in the required fields (date, order number' + (PROPS.requireBookingNumber ? ', booking number' : '') + ').');
+  if (!f.orderNumber) {
+    window.alert('Please fill in the order number.');
     return;
   }
   var entries;
