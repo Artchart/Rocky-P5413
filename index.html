@@ -276,6 +276,29 @@ function editEntry(id) {
   render();
 }
 
+function entryToText(e) {
+  var lines = [];
+  FIELDS.forEach(function (f) {
+    var v = e[f.key];
+    if (f.key === 'date') v = formatDateLabel(v);
+    lines.push(f.label + ': ' + (v || '—'));
+  });
+  return lines.join('\n');
+}
+
+function shareEntry(id) {
+  var e = state.entries.find(function (x) { return x.id === id; });
+  if (!e) return;
+  var subject = 'Order ' + (e.orderNumber || '') + (e.customerName ? ' — ' + e.customerName : '');
+  var body = entryToText(e);
+
+  if (navigator.share) {
+    navigator.share({ title: subject, text: body }).catch(function () { /* user cancelled */ });
+  } else {
+    window.location.href = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+  }
+}
+
 function deleteEntry(id) {
   if (!window.confirm('Delete this entry?')) return;
   var entries = state.entries.filter(function (e) { return e.id !== id; });
@@ -478,6 +501,8 @@ function renderEntryTab(v) {
         '<div style="font-size:12px;color:oklch(0.5 0.01 95);margin-top:1px">' + esc(card.customerName) + ' · ' + esc(card.dateLabel) + '</div>' +
         '</div>' +
         '<div style="display:flex;gap:6px;flex-shrink:0">' +
+        '<button data-action="share-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.93 0.05 240);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
+        '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.45 0.1 240)">ios_share</span></button>' +
         '<button data-action="edit-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.93 0.07 95);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
         '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.4 0.08 155)">edit</span></button>' +
         '<button data-action="delete-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.94 0.07 20);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
@@ -510,6 +535,7 @@ function renderEntryTab(v) {
       else if (action === 'save-entry') saveEntry();
       else if (action === 'edit-entry') editEntry(el.getAttribute('data-id'));
       else if (action === 'delete-entry') deleteEntry(el.getAttribute('data-id'));
+      else if (action === 'share-entry') shareEntry(el.getAttribute('data-id'));
     });
   });
 }
