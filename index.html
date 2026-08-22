@@ -203,6 +203,22 @@ function defaultRange() {
   return { start: toISO(start), end: toISO(end) };
 }
 
+/* Friday-start of the Friday–Thursday week containing the given ISO date */
+function weekStartForISO(iso) {
+  var d = new Date(iso + 'T00:00:00');
+  var diffToFriday = (d.getDay() - 5 + 7) % 7;
+  var start = new Date(d);
+  start.setDate(d.getDate() - diffToFriday);
+  return toISO(start);
+}
+function weekLabelForStart(startISO) {
+  var start = new Date(startISO + 'T00:00:00');
+  var end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  var fmt = function (d) { return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
+  return fmt(start) + ' – ' + fmt(end) + ', ' + end.getFullYear();
+}
+
 var MAX_RANGE_DAYS = 92; // defensive cap so a mistyped year can't hang the page
 
 function buildDateRange(startISO, endISO) {
@@ -266,7 +282,8 @@ var state = {
   editingId: null,
   rangeStart: defaultRange().start,
   rangeEnd: defaultRange().end,
-  expandedWeekKeys: {}, // week chunk key -> true/false override; unset = default (last chunk open, earlier ones collapsed)
+  expandedWeekKeys: {}, // report-tab week chunk key -> true/false override; unset = default (last chunk open, earlier ones collapsed)
+  expandedEntryWeeks: {}, // home-tab saved-entries week key -> true/false override; unset = default (current/future open, past collapsed)
 };
 
 (function loadEntries() {
@@ -364,6 +381,10 @@ function toggleWeek(key, currentlyExpanded) {
   state.expandedWeekKeys[key] = !currentlyExpanded;
   render();
 }
+function toggleEntryWeek(key, currentlyExpanded) {
+  state.expandedEntryWeeks[key] = !currentlyExpanded;
+  render();
+}
 function downloadPdf() {
   // Read the date inputs directly in case a browser hasn't fired
   // 'change' yet (e.g. a picker still open when this is clicked) —
@@ -451,11 +472,28 @@ function computeVals() {
   var entryCards = sortedEntries.map(function (e) {
     return {
       id: e.id,
+      dateISO: e.date || '',
       orderNumber: e.orderNumber || '—',
       customerName: e.customerName || '—',
       dateLabel: formatDateLabel(e.date),
       details: detailKeys.map(function (f) { return { icon: f.icon, label: f.label, value: e[f.key] || '—', section: f.section }; }),
     };
+  });
+
+  var currentWeekKey = weekStartForISO(todayISO());
+  var entryWeeksMap = {};
+  var entryWeekOrder = [];
+  entryCards.forEach(function (card) {
+    var key = card.dateISO ? weekStartForISO(card.dateISO) : currentWeekKey;
+    if (!entryWeeksMap[key]) {
+      entryWeeksMap[key] = { key: key, label: weekLabelForStart(key), cards: [], isPast: key < currentWeekKey };
+      entryWeekOrder.push(key);
+    }
+    entryWeeksMap[key].cards.push(card);
+  });
+  var entryWeeks = entryWeekOrder.map(function (key) { return entryWeeksMap[key]; });
+  entryWeeks.forEach(function (w) {
+    w.expanded = s.expandedEntryWeeks.hasOwnProperty(w.key) ? s.expandedEntryWeeks[w.key] : !w.isPast;
   });
 
   var range = buildDateRange(s.rangeStart, s.rangeEnd);
@@ -497,6 +535,7 @@ function computeVals() {
     isEditing: !!s.editingId,
     entryCards: entryCards,
     entryCount: entryCards.length,
+    entryWeeks: entryWeeks,
     rangeStartInput: s.rangeStart,
     rangeEndInput: s.rangeEnd,
     rangeLabel: range.label,
@@ -563,33 +602,51 @@ function renderEntryTab(v) {
     '<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:14px;color:oklch(0.22 0.01 95);margin-bottom:10px;display:flex;align-items:center;gap:6px">' +
     '<span class="material-symbols-outlined" style="font-size:18px;color:oklch(0.55 0.01 95)">list_alt</span>Saved Entries</div>';
 
-  if (v.entryCards.length) {
-    v.entryCards.forEach(function (card) {
+  function renderEntryCard(card) {
+    html += '' +
+      '<div style="background:#fff;border:1px solid oklch(0.9 0.005 95);border-radius:14px;padding:14px;margin-bottom:10px">' +
+      '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;gap:8px">' +
+      '<div style="min-width:0">' +
+      '<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:14.5px;color:oklch(0.22 0.01 95)">' + esc(card.orderNumber) + '</div>' +
+      '<div style="font-size:12px;color:oklch(0.5 0.01 95);margin-top:1px">' + esc(card.customerName) + ' · ' + esc(card.dateLabel) + '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;flex-shrink:0">' +
+      '<button data-action="share-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.93 0.05 240);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
+      '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.45 0.1 240)">ios_share</span></button>' +
+      '<button data-action="edit-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.93 0.07 95);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
+      '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.4 0.08 155)">edit</span></button>' +
+      '<button data-action="delete-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.94 0.07 20);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
+      '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.55 0.21 20)">delete</span></button>' +
+      '</div></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;padding-top:8px;border-top:1px solid oklch(0.94 0.004 95)">';
+    card.details.forEach(function (d) {
+      var dsc = sectionColor(d.section);
       html += '' +
-        '<div style="background:#fff;border:1px solid oklch(0.9 0.005 95);border-radius:14px;padding:14px;margin-bottom:10px">' +
-        '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;gap:8px">' +
-        '<div style="min-width:0">' +
-        '<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:14.5px;color:oklch(0.22 0.01 95)">' + esc(card.orderNumber) + '</div>' +
-        '<div style="font-size:12px;color:oklch(0.5 0.01 95);margin-top:1px">' + esc(card.customerName) + ' · ' + esc(card.dateLabel) + '</div>' +
-        '</div>' +
-        '<div style="display:flex;gap:6px;flex-shrink:0">' +
-        '<button data-action="share-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.93 0.05 240);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
-        '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.45 0.1 240)">ios_share</span></button>' +
-        '<button data-action="edit-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.93 0.07 95);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
-        '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.4 0.08 155)">edit</span></button>' +
-        '<button data-action="delete-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.94 0.07 20);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
-        '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.55 0.21 20)">delete</span></button>' +
-        '</div></div>' +
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;padding-top:8px;border-top:1px solid oklch(0.94 0.004 95)">';
-      card.details.forEach(function (d) {
-        var dsc = sectionColor(d.section);
+        '<div style="display:flex;align-items:flex-start;gap:6px;min-width:0">' +
+        '<span class="material-symbols-outlined" style="font-size:14px;color:' + dsc.base + ';margin-top:1px;flex-shrink:0">' + esc(d.icon) + '</span>' +
+        '<div style="min-width:0"><div style="font-size:9.5px;color:oklch(0.6 0.01 95)">' + esc(d.label) + '</div>' +
+        '<div style="font-size:12px;color:oklch(0.3 0.01 95);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(d.value) + '</div></div></div>';
+    });
+    html += '</div></div>';
+  }
+
+  if (v.entryWeeks.length) {
+    var multiEntryWeek = v.entryWeeks.length > 1;
+    v.entryWeeks.forEach(function (week) {
+      if (multiEntryWeek) {
+        var chevron = week.expanded ? 'expand_less' : 'expand_more';
         html += '' +
-          '<div style="display:flex;align-items:flex-start;gap:6px;min-width:0">' +
-          '<span class="material-symbols-outlined" style="font-size:14px;color:' + dsc.base + ';margin-top:1px;flex-shrink:0">' + esc(d.icon) + '</span>' +
-          '<div style="min-width:0"><div style="font-size:9.5px;color:oklch(0.6 0.01 95)">' + esc(d.label) + '</div>' +
-          '<div style="font-size:12px;color:oklch(0.3 0.01 95);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(d.value) + '</div></div></div>';
-      });
-      html += '</div></div>';
+          '<button data-action="toggle-entry-week" data-key="' + esc(week.key) + '" data-expanded="' + week.expanded + '" style="width:100%;display:flex;align-items:center;justify-content:space-between;background:' + (week.expanded ? '#fff' : 'oklch(0.965 0.004 95)') + ';border:1px solid oklch(0.9 0.005 95);border-radius:12px;padding:10px 12px;margin-bottom:8px;cursor:pointer;text-align:left">' +
+          '<div>' +
+          '<div style="font-family:Manrope,sans-serif;font-weight:700;font-size:13px;color:oklch(0.25 0.01 95)">' + esc(week.label) + '</div>' +
+          '<div style="font-size:11px;color:oklch(0.55 0.01 95);margin-top:1px">' + week.cards.length + ' entr' + (week.cards.length === 1 ? 'y' : 'ies') + '</div>' +
+          '</div>' +
+          '<span class="material-symbols-outlined" style="font-size:20px;color:oklch(0.5 0.01 95)">' + chevron + '</span>' +
+          '</button>';
+      }
+      if (week.expanded) {
+        week.cards.forEach(renderEntryCard);
+      }
     });
   } else {
     html += '<div style="text-align:center;padding:30px 10px;color:oklch(0.6 0.01 95);font-size:13px">No entries yet — fill the form above and tap Save.</div>';
@@ -609,6 +666,7 @@ function renderEntryTab(v) {
       else if (action === 'edit-entry') editEntry(el.getAttribute('data-id'));
       else if (action === 'delete-entry') deleteEntry(el.getAttribute('data-id'));
       else if (action === 'share-entry') shareEntry(el.getAttribute('data-id'));
+      else if (action === 'toggle-entry-week') toggleEntryWeek(el.getAttribute('data-key'), el.getAttribute('data-expanded') === 'true');
     });
   });
 }
