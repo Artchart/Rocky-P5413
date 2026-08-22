@@ -109,7 +109,7 @@ input { font: inherit; }
     </button>
     <button id="tabReportBtn" style="display:flex;flex-direction:column;align-items:center;gap:2px;border:none;background:none;cursor:pointer;flex:1">
       <span class="material-symbols-outlined" style="font-size:23px">bar_chart_4_bars</span>
-      <span style="font-size:10.5px;font-weight:700;font-family:Manrope,sans-serif">Weekly Report</span>
+      <span style="font-size:10.5px;font-weight:700;font-family:Manrope,sans-serif">Report</span>
     </button>
   </div>
 </div>
@@ -118,7 +118,7 @@ input { font: inherit; }
   <div style="font-family:Manrope,sans-serif;padding:40px 50px;color:oklch(0.2 0.01 95)">
     <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid oklch(0.2 0.01 95);padding-bottom:16px;margin-bottom:20px">
       <div>
-        <div style="font-weight:800;font-size:22px" id="printAppName">Weekly Report</div>
+        <div style="font-weight:800;font-size:22px" id="printAppName">Report</div>
         <div style="font-size:13px;color:oklch(0.5 0.01 95);margin-top:2px" id="printWeekLabel"></div>
       </div>
       <div style="text-align:right;font-size:12px;color:oklch(0.5 0.01 95)">
@@ -136,7 +136,6 @@ input { font: inherit; }
 var TRUCK_NAME_KEY = 'driverTruckName_v1';
 var PROPS = {
   appName: window.localStorage.getItem(TRUCK_NAME_KEY) || 'My Truck',
-  weekStartsOn: 'Monday',       // 'Monday' | 'Sunday'
 };
 
 function editTruckName() {
@@ -192,17 +191,33 @@ function formatDateLabel(iso) {
   if (isNaN(d.getTime())) return '—';
   return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }
-function getWeekRange(offset, startDay) {
-  var now = new Date();
-  var day = now.getDay();
-  var diffToStart = startDay === 'Sunday' ? -day : (day === 0 ? -6 : 1 - day);
-  var start = new Date(now);
-  start.setDate(now.getDate() + diffToStart + offset * 7);
+/* Default report range: most recent Friday through the following Thursday */
+function defaultRange() {
+  var today = new Date();
+  var diffToFriday = (today.getDay() - 5 + 7) % 7; // Friday = 5
+  var start = new Date(today);
+  start.setDate(today.getDate() - diffToFriday);
   start.setHours(0, 0, 0, 0);
+  var end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return { start: toISO(start), end: toISO(end) };
+}
+
+var MAX_RANGE_DAYS = 92; // defensive cap so a mistyped year can't hang the page
+
+function buildDateRange(startISO, endISO) {
+  var s = startISO && !isNaN(new Date(startISO + 'T00:00:00').getTime()) ? startISO : todayISO();
+  var e = endISO && !isNaN(new Date(endISO + 'T00:00:00').getTime()) ? endISO : todayISO();
+  if (s > e) { var tmp = s; s = e; e = tmp; }
+  var startDate = new Date(s + 'T00:00:00');
+  var endDate = new Date(e + 'T00:00:00');
+  var dayCount = Math.round((endDate - startDate) / 86400000) + 1;
+  if (dayCount > MAX_RANGE_DAYS) dayCount = MAX_RANGE_DAYS;
+
   var days = [];
-  for (var i = 0; i < 7; i++) {
-    var d = new Date(start);
-    d.setDate(start.getDate() + i);
+  for (var i = 0; i < dayCount; i++) {
+    var d = new Date(startDate);
+    d.setDate(startDate.getDate() + i);
     var iso = toISO(d);
     days.push({
       iso: iso,
@@ -211,12 +226,12 @@ function getWeekRange(offset, startDay) {
       isToday: iso === todayISO(),
     });
   }
-  var first = days[0], last = days[6];
+  var first = days[0], last = days[days.length - 1];
   return {
     startISO: first.iso,
     endISO: last.iso,
     days: days,
-    label: first.dateLabel + ' – ' + last.dateLabel + ', ' + start.getFullYear(),
+    label: first.dateLabel + ' – ' + last.dateLabel + ', ' + endDate.getFullYear(),
   };
 }
 function esc(v) {
@@ -231,7 +246,8 @@ var state = {
   form: emptyForm(),
   entries: [],
   editingId: null,
-  weekOffset: 0,
+  rangeStart: defaultRange().start,
+  rangeEnd: defaultRange().end,
 };
 
 (function loadEntries() {
@@ -320,7 +336,11 @@ function deleteEntry(id) {
 }
 
 function setTab(tab) { state.tab = tab; render(); }
-function changeWeek(delta) { state.weekOffset += delta; render(); }
+function setRangeField(field, value) {
+  if (field === 'start') state.rangeStart = value;
+  else state.rangeEnd = value;
+  render();
+}
 function downloadPdf() {
   var v = computeVals();
   var jsPDF = window.jspdf.jsPDF;
@@ -333,14 +353,14 @@ function downloadPdf() {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);
   doc.setTextColor(20, 20, 20);
-  doc.text(PROPS.appName + ' — Weekly Report', margin, y);
+  doc.text(PROPS.appName + ' — Report', margin, y);
 
   y += 18;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
   doc.setTextColor(100, 100, 100);
-  doc.text(v.weekLabel, margin, y);
-  doc.text('Total orders: ' + v.weekTotal, pageWidth - margin, y, { align: 'right' });
+  doc.text(v.rangeLabel, margin, y);
+  doc.text('Total orders: ' + v.rangeTotal, pageWidth - margin, y, { align: 'right' });
 
   y += 12;
   doc.setDrawColor(20, 20, 20);
@@ -348,7 +368,7 @@ function downloadPdf() {
   doc.line(margin, y, pageWidth - margin, y);
   y += 20;
 
-  v.weekGroups.forEach(function (grp) {
+  v.rangeGroups.forEach(function (grp) {
     if (y > pageHeight - 90) { doc.addPage(); y = 50; }
 
     doc.setFont('helvetica', 'bold');
@@ -379,9 +399,9 @@ function downloadPdf() {
     }
   });
 
-  var safeName = (PROPS.appName || 'Weekly-Report').replace(/[^\w-]+/g, '-');
-  var safeWeek = v.weekLabel.replace(/[^\w-]+/g, '-');
-  doc.save(safeName + '_' + safeWeek + '.pdf');
+  var safeName = (PROPS.appName || 'Report').replace(/[^\w-]+/g, '-');
+  var safeRange = v.rangeLabel.replace(/[^\w-]+/g, '-');
+  doc.save(safeName + '_' + safeRange + '.pdf');
 }
 
 /* ============ Derived view-model (mirrors the original `renderVals`) ============ */
@@ -407,11 +427,10 @@ function computeVals() {
     };
   });
 
-  var startDay = PROPS.weekStartsOn || 'Monday';
-  var week = getWeekRange(s.weekOffset, startDay);
-  var weekEntries = s.entries.filter(function (e) { return e.date && e.date >= week.startISO && e.date <= week.endISO; });
-  var weekGroups = week.days.map(function (d) {
-    var dayEntries = weekEntries.filter(function (e) { return e.date === d.iso; })
+  var range = buildDateRange(s.rangeStart, s.rangeEnd);
+  var rangeEntries = s.entries.filter(function (e) { return e.date && e.date >= range.startISO && e.date <= range.endISO; });
+  var rangeGroups = range.days.map(function (d) {
+    var dayEntries = rangeEntries.filter(function (e) { return e.date === d.iso; })
       .sort(function (a, b) { return (a.orderNumber || '').localeCompare(b.orderNumber || ''); });
     return {
       iso: d.iso, dayName: d.dayName, dateLabel: d.dateLabel, isToday: d.isToday,
@@ -440,9 +459,11 @@ function computeVals() {
     isEditing: !!s.editingId,
     entryCards: entryCards,
     entryCount: entryCards.length,
-    weekLabel: week.label,
-    weekGroups: weekGroups,
-    weekTotal: weekEntries.length,
+    rangeStartInput: s.rangeStart,
+    rangeEndInput: s.rangeEnd,
+    rangeLabel: range.label,
+    rangeGroups: rangeGroups,
+    rangeTotal: rangeEntries.length,
   };
 }
 
@@ -452,7 +473,7 @@ function render() {
 
   document.getElementById('appNameLabel').textContent = PROPS.appName;
   document.getElementById('entryCountBadge').textContent = v.entryCount + ' saved';
-  document.getElementById('printAppName').textContent = PROPS.appName + ' — Weekly Report';
+  document.getElementById('printAppName').textContent = PROPS.appName + ' — Report';
 
   document.getElementById('tabEntryBtn').style.color = v.isEntryTab ? ACCENT : MUTED;
   document.getElementById('tabReportBtn').style.color = v.isReportTab ? ACCENT2 : MUTED;
@@ -555,19 +576,24 @@ function renderEntryTab(v) {
 
 function renderReportTab(v) {
   var html = '' +
-    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;gap:10px">' +
-    '<button data-action="prev-week" style="width:32px;height:32px;border-radius:9px;border:1px solid oklch(0.9 0.005 95);background:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0">' +
-    '<span class="material-symbols-outlined" style="font-size:18px">chevron_left</span></button>' +
-    '<div style="text-align:center;min-width:0">' +
-    '<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:14px;color:oklch(0.22 0.01 95)">' + esc(v.weekLabel) + '</div>' +
-    '<div style="font-size:11px;color:oklch(0.55 0.01 95)">' + v.weekTotal + ' orders this week</div></div>' +
-    '<button data-action="next-week" style="width:32px;height:32px;border-radius:9px;border:1px solid oklch(0.9 0.005 95);background:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0">' +
-    '<span class="material-symbols-outlined" style="font-size:18px">chevron_right</span></button>' +
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">' +
+    '<div style="flex:1;background:#fff;border:1px solid oklch(0.9 0.005 95);border-radius:12px;padding:9px 12px">' +
+    '<div style="font-size:10px;color:oklch(0.55 0.01 95);margin-bottom:2px">From</div>' +
+    '<input type="date" data-range-field="start" value="' + esc(v.rangeStartInput) + '" style="border:none;outline:none;width:100%;font-size:14px;color:oklch(0.22 0.01 95);font-family:inherit;background:transparent;padding:0;box-sizing:border-box">' +
+    '</div>' +
+    '<div style="flex:1;background:#fff;border:1px solid oklch(0.9 0.005 95);border-radius:12px;padding:9px 12px">' +
+    '<div style="font-size:10px;color:oklch(0.55 0.01 95);margin-bottom:2px">To</div>' +
+    '<input type="date" data-range-field="end" value="' + esc(v.rangeEndInput) + '" style="border:none;outline:none;width:100%;font-size:14px;color:oklch(0.22 0.01 95);font-family:inherit;background:transparent;padding:0;box-sizing:border-box">' +
+    '</div>' +
+    '</div>' +
+    '<div style="text-align:center;margin-bottom:4px">' +
+    '<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:14px;color:oklch(0.22 0.01 95)">' + esc(v.rangeLabel) + '</div>' +
+    '<div style="font-size:11px;color:oklch(0.55 0.01 95)">' + v.rangeTotal + ' orders in range</div>' +
     '</div>' +
     '<button data-action="download-pdf" style="width:100%;margin:14px 0 18px;padding:13px;border:none;border-radius:14px;background:oklch(0.35 0.05 55);color:#fff;font-family:Manrope,sans-serif;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer">' +
-    '<span class="material-symbols-outlined" style="font-size:18px">download</span>Download Weekly PDF</button>';
+    '<span class="material-symbols-outlined" style="font-size:18px">download</span>Download PDF</button>';
 
-  v.weekGroups.forEach(function (grp) {
+  v.rangeGroups.forEach(function (grp) {
     html += '' +
       '<div style="margin-bottom:14px">' +
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">' +
@@ -595,19 +621,22 @@ function renderReportTab(v) {
   document.getElementById('reportTab').querySelectorAll('[data-action]').forEach(function (el) {
     el.addEventListener('click', function () {
       var action = el.getAttribute('data-action');
-      if (action === 'prev-week') changeWeek(-1);
-      else if (action === 'next-week') changeWeek(1);
-      else if (action === 'download-pdf') downloadPdf();
+      if (action === 'download-pdf') downloadPdf();
+    });
+  });
+  document.getElementById('reportTab').querySelectorAll('input[data-range-field]').forEach(function (input) {
+    input.addEventListener('change', function () {
+      setRangeField(input.getAttribute('data-range-field'), input.value);
     });
   });
 }
 
 function renderPrintReport(v) {
-  document.getElementById('printWeekLabel').textContent = v.weekLabel;
-  document.getElementById('printWeekTotal').textContent = v.weekTotal;
+  document.getElementById('printWeekLabel').textContent = v.rangeLabel;
+  document.getElementById('printWeekTotal').textContent = v.rangeTotal;
 
   var html = '';
-  v.weekGroups.forEach(function (grp) {
+  v.rangeGroups.forEach(function (grp) {
     html += '' +
       '<div style="margin-bottom:22px">' +
       '<div style="font-weight:700;font-size:14px;margin-bottom:8px;display:flex;gap:8px;align-items:baseline">' +
