@@ -167,6 +167,16 @@ var ACCENT2 = 'oklch(0.35 0.05 55)';
 var MUTED = 'oklch(0.62 0.01 95)';
 var STORAGE_KEY = 'driverOrderEntries_v1';
 
+/* Section color-coding — modern, roughly complementary hues around the wheel */
+var SECTION_COLORS = {
+  'Order Details': { base: 'oklch(0.42 0.09 155)', tint: 'oklch(0.94 0.03 155)' },  // green
+  'Chassis':        { base: 'oklch(0.48 0.13 258)', tint: 'oklch(0.94 0.025 258)' }, // indigo
+  'Container':      { base: 'oklch(0.6 0.15 55)',   tint: 'oklch(0.94 0.045 55)' },  // amber (complements indigo)
+  'Notes':          { base: 'oklch(0.5 0.12 330)',  tint: 'oklch(0.94 0.03 330)' },  // plum
+};
+var DEFAULT_SECTION_COLOR = { base: ACCENT, tint: 'oklch(0.93 0.07 95)' };
+function sectionColor(section) { return SECTION_COLORS[section] || DEFAULT_SECTION_COLOR; }
+
 function pad2(n) { return n < 10 ? '0' + n : '' + n; }
 function toISO(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
 function todayISO() { return toISO(new Date()); }
@@ -393,7 +403,7 @@ function computeVals() {
       orderNumber: e.orderNumber || '—',
       customerName: e.customerName || '—',
       dateLabel: formatDateLabel(e.date),
-      details: detailKeys.map(function (f) { return { icon: f.icon, label: f.label, value: e[f.key] || '—' }; }),
+      details: detailKeys.map(function (f) { return { icon: f.icon, label: f.label, value: e[f.key] || '—', section: f.section }; }),
     };
   });
 
@@ -469,12 +479,13 @@ function renderEntryTab(v) {
   }
 
   v.fields.forEach(function (field) {
+    var sc = sectionColor(field.section);
     if (field.sectionStart) {
-      html += '<div style="font-family:Manrope,sans-serif;font-weight:700;font-size:11.5px;letter-spacing:0.06em;text-transform:uppercase;color:oklch(0.55 0.01 95);margin:18px 0 8px 2px">' + esc(field.section) + '</div>';
+      html += '<div style="font-family:Manrope,sans-serif;font-weight:700;font-size:11.5px;letter-spacing:0.06em;text-transform:uppercase;color:' + sc.base + ';margin:18px 0 8px 2px">' + esc(field.section) + '</div>';
     }
     html += '' +
-      '<div style="display:flex;align-items:center;gap:10px;background:#fff;border:1px solid oklch(0.9 0.005 95);border-radius:12px;padding:11px 13px;margin-bottom:8px">' +
-      '<span class="material-symbols-outlined" style="font-size:19px;color:oklch(0.4 0.08 155);flex-shrink:0">' + esc(field.icon) + '</span>' +
+      '<div style="display:flex;align-items:center;gap:10px;background:#fff;border:1px solid oklch(0.9 0.005 95);border-left:3px solid ' + sc.base + ';border-radius:12px;padding:11px 13px 11px 11px;margin-bottom:8px">' +
+      '<span class="material-symbols-outlined" style="font-size:16px;color:' + sc.base + ';flex-shrink:0;background:' + sc.tint + ';width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center">' + esc(field.icon) + '</span>' +
       '<div style="flex:1;min-width:0">' +
       '<div style="font-size:10.5px;color:oklch(0.55 0.01 95);margin-bottom:2px">' + esc(field.label) + '</div>' +
       '<input type="' + esc(field.type) + '" data-field="' + esc(field.key) + '" value="' + esc(field.value) + '" placeholder="' + esc(field.placeholder || '') + '" style="border:none;outline:none;width:100%;font-size:14.5px;color:oklch(0.22 0.01 95);font-family:inherit;background:transparent;padding:0;box-sizing:border-box">' +
@@ -511,9 +522,10 @@ function renderEntryTab(v) {
         '</div></div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;padding-top:8px;border-top:1px solid oklch(0.94 0.004 95)">';
       card.details.forEach(function (d) {
+        var dsc = sectionColor(d.section);
         html += '' +
           '<div style="display:flex;align-items:flex-start;gap:6px;min-width:0">' +
-          '<span class="material-symbols-outlined" style="font-size:14px;color:oklch(0.6 0.01 95);margin-top:1px;flex-shrink:0">' + esc(d.icon) + '</span>' +
+          '<span class="material-symbols-outlined" style="font-size:14px;color:' + dsc.base + ';margin-top:1px;flex-shrink:0">' + esc(d.icon) + '</span>' +
           '<div style="min-width:0"><div style="font-size:9.5px;color:oklch(0.6 0.01 95)">' + esc(d.label) + '</div>' +
           '<div style="font-size:12px;color:oklch(0.3 0.01 95);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(d.value) + '</div></div></div>';
       });
