@@ -276,12 +276,13 @@ function editEntry(id) {
   render();
 }
 
+var SHARE_KEYS = ['orderNumber', 'containerNumber', 'chassisNumber'];
+
 function entryToText(e) {
   var lines = [];
-  FIELDS.forEach(function (f) {
-    var v = e[f.key];
-    if (f.key === 'date') v = formatDateLabel(v);
-    lines.push(f.label + ': ' + (v || '—'));
+  SHARE_KEYS.forEach(function (key) {
+    var f = FIELDS.find(function (x) { return x.key === key; });
+    lines.push(f.label + ': ' + (e[key] || '—'));
   });
   return lines.join('\n');
 }
@@ -289,7 +290,7 @@ function entryToText(e) {
 function shareEntry(id) {
   var e = state.entries.find(function (x) { return x.id === id; });
   if (!e) return;
-  var subject = 'Order ' + (e.orderNumber || '') + (e.customerName ? ' — ' + e.customerName : '');
+  var subject = 'Order ' + (e.orderNumber || '');
   var body = entryToText(e);
 
   if (navigator.share) {
