@@ -342,6 +342,14 @@ function setRangeField(field, value) {
   render();
 }
 function downloadPdf() {
+  // Read the date inputs directly in case a browser hasn't fired
+  // 'change' yet (e.g. a picker still open when this is clicked) —
+  // guarantees the PDF always matches what's on screen.
+  var startInput = document.querySelector('input[data-range-field="start"]');
+  var endInput = document.querySelector('input[data-range-field="end"]');
+  if (startInput && startInput.value) state.rangeStart = startInput.value;
+  if (endInput && endInput.value) state.rangeEnd = endInput.value;
+
   var v = computeVals();
   var jsPDF = window.jspdf.jsPDF;
   var doc = new jsPDF({ unit: 'pt', format: 'letter' });
