@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Driver Order Tracker</title>
 <meta name="apple-mobile-web-app-title" content="Driver Tracker">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1c5434">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
 <style>
 /* ---- Manrope (self-hosted) ---- */
 @font-face { font-family:'Manrope'; font-style:normal; font-weight:600; font-display:swap; src:url("fonts/manrope-cyrillic-ext.woff2") format('woff2'); unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F; }
@@ -121,6 +127,8 @@ input { font: inherit; }
     </button>
   </div>
 </div>
+
+<input type="file" id="importBackupInput" accept="application/json,.json" style="display:none">
 
 <div class="print-report" id="printReport">
   <div style="font-family:Manrope,sans-serif;padding:40px 50px;color:oklch(0.2 0.01 95)">
@@ -295,6 +303,15 @@ function esc(v) {
   });
 }
 
+/* Master search matches order #, customer, and every detail field
+   (container #, chassis #, booking #, locations, notes). */
+function cardMatchesSearch(card, term) {
+  var t = term.toLowerCase();
+  if (card.orderNumber.toLowerCase().indexOf(t) !== -1) return true;
+  if (card.customerName.toLowerCase().indexOf(t) !== -1) return true;
+  return card.details.some(function (d) { return String(d.value).toLowerCase().indexOf(t) !== -1; });
+}
+
 /* ============ App state (mirrors the original component's `state`) ============ */
 var state = {
   tab: 'entry',
@@ -396,6 +413,20 @@ function togglePaid(id) {
   render();
 }
 
+function markRangePaid() {
+  var v = computeVals();
+  var range = buildDateRange(state.rangeStart, state.rangeEnd);
+  if (!v.rangeUnpaidCount) { window.alert('Everything in ' + range.label + ' is already marked paid.'); return; }
+  if (!window.confirm('Mark ' + v.rangeUnpaidCount + ' unpaid order(s) in ' + range.label + ' as paid?')) return;
+  var entries = state.entries.map(function (e) {
+    if (e.paid || !e.date || e.date < range.startISO || e.date > range.endISO) return e;
+    return Object.assign({}, e, { paid: true });
+  });
+  persist(entries);
+  state.entries = entries;
+  render();
+}
+
 function emailMissingOrders() {
   var v = computeVals();
   if (!v.unpaidCards.length) { window.alert('No unpaid orders to report.'); return; }
@@ -431,6 +462,63 @@ function toggleEntryWeek(key, currentlyExpanded) {
   state.expandedEntryWeeks[key] = !currentlyExpanded;
   render();
 }
+function exportBackup() {
+  var payload = {
+    app: 'driver-order-tracker',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    truckName: PROPS.appName,
+    dispatchEmail: PROPS.dispatchEmail,
+    entries: state.entries,
+  };
+  var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  var safeName = (PROPS.appName || 'DriverOrders').replace(/[^\w-]+/g, '-');
+  a.href = url;
+  a.download = safeName + '_backup_' + todayISO() + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
+
+function importBackupFile(file) {
+  var reader = new FileReader();
+  reader.onload = function () {
+    var data;
+    try { data = JSON.parse(reader.result); } catch (e) {
+      window.alert('That file is not a valid backup (could not read JSON).');
+      return;
+    }
+    if (!data || !Array.isArray(data.entries)) {
+      window.alert('That file does not look like a Driver Order Tracker backup.');
+      return;
+    }
+    var existingIds = {};
+    state.entries.forEach(function (e) { existingIds[e.id] = true; });
+    var merged = state.entries.slice();
+    var added = 0, skipped = 0;
+    data.entries.forEach(function (e) {
+      if (!e || !e.id || existingIds[e.id]) { skipped++; return; }
+      merged.push(Object.assign({ paid: false }, e));
+      existingIds[e.id] = true;
+      added++;
+    });
+    if (!added) {
+      window.alert('Nothing new to import — all ' + skipped + ' order(s) in that backup are already saved on this device.');
+      return;
+    }
+    if (!window.confirm('Import ' + added + ' order(s) from this backup' + (skipped ? ' (' + skipped + ' already on this device will be skipped)' : '') + '?')) return;
+    persist(merged);
+    state.entries = merged;
+    render();
+    window.alert('Imported ' + added + ' order(s).');
+  };
+  reader.onerror = function () { window.alert('Could not read that file.'); };
+  reader.readAsText(file);
+}
+
 function downloadPdf() {
   // Read the date inputs directly in case a browser hasn't fired
   // 'change' yet (e.g. a picker still open when this is clicked) —
@@ -534,7 +622,7 @@ function computeVals() {
   var searchTerm = (s.search || '').trim();
   var searchActive = !!searchTerm;
   var searchResults = searchActive
-    ? entryCards.filter(function (card) { return card.orderNumber.toLowerCase().indexOf(searchTerm.toLowerCase()) !== -1; })
+    ? entryCards.filter(function (card) { return cardMatchesSearch(card, searchTerm); })
     : [];
 
   var currentWeekKey = weekStartForISO(todayISO());
@@ -555,6 +643,7 @@ function computeVals() {
 
   var range = buildDateRange(s.rangeStart, s.rangeEnd);
   var rangeEntries = s.entries.filter(function (e) { return e.date && e.date >= range.startISO && e.date <= range.endISO; });
+  var rangeUnpaidCount = rangeEntries.filter(function (e) { return !e.paid; }).length;
   var rangeGroups = range.days.map(function (d) {
     var dayEntries = rangeEntries.filter(function (e) { return e.date === d.iso; })
       .sort(function (a, b) { return (a.orderNumber || '').localeCompare(b.orderNumber || ''); });
@@ -606,6 +695,7 @@ function computeVals() {
     rangeLabel: range.label,
     rangeGroups: rangeGroups,
     rangeTotal: rangeEntries.length,
+    rangeUnpaidCount: rangeUnpaidCount,
     weekChunks: weekChunks,
   };
 }
@@ -760,7 +850,7 @@ function renderEntryTab(v) {
   html += '' +
     '<div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid oklch(0.9 0.005 95);border-radius:12px;padding:9px 12px;margin-bottom:12px">' +
     '<span class="material-symbols-outlined" style="font-size:18px;color:oklch(0.55 0.01 95)">search</span>' +
-    '<input type="text" id="masterSearchInput" value="' + esc(v.searchTerm) + '" placeholder="Search by order number" style="border:none;outline:none;flex:1;font-size:14px;color:oklch(0.22 0.01 95);font-family:inherit;background:transparent;padding:0;box-sizing:border-box">' +
+    '<input type="text" id="masterSearchInput" value="' + esc(v.searchTerm) + '" placeholder="Search order, container, chassis, customer…" style="border:none;outline:none;flex:1;font-size:14px;color:oklch(0.22 0.01 95);font-family:inherit;background:transparent;padding:0;box-sizing:border-box">' +
     (v.searchTerm ? '<button data-action="clear-search" style="border:none;background:none;padding:0;cursor:pointer;display:flex;align-items:center;flex-shrink:0"><span class="material-symbols-outlined" style="font-size:18px;color:oklch(0.55 0.01 95)">close</span></button>' : '') +
     '</div>';
 
@@ -839,8 +929,12 @@ function renderReportTab(v) {
     '<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:14px;color:oklch(0.22 0.01 95)">' + esc(v.rangeLabel) + '</div>' +
     '<div style="font-size:11px;color:oklch(0.55 0.01 95)">' + v.rangeTotal + ' orders in range</div>' +
     '</div>' +
-    '<button data-action="download-pdf" style="width:100%;margin:14px 0 18px;padding:13px;border:none;border-radius:14px;background:oklch(0.35 0.05 55);color:#fff;font-family:Manrope,sans-serif;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer">' +
-    '<span class="material-symbols-outlined" style="font-size:18px">download</span>Download PDF</button>';
+    '<button data-action="download-pdf" style="width:100%;margin:14px 0 8px;padding:13px;border:none;border-radius:14px;background:oklch(0.35 0.05 55);color:#fff;font-family:Manrope,sans-serif;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer">' +
+    '<span class="material-symbols-outlined" style="font-size:18px">download</span>Download PDF</button>' +
+    '<button data-action="mark-range-paid" style="width:100%;margin-bottom:18px;padding:13px;border:none;border-radius:14px;background:' + (v.rangeUnpaidCount ? 'oklch(0.42 0.09 155)' : 'oklch(0.9 0.005 95)') + ';color:' + (v.rangeUnpaidCount ? '#fff' : 'oklch(0.6 0.01 95)') + ';font-family:Manrope,sans-serif;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;' + (v.rangeUnpaidCount ? 'cursor:pointer' : 'cursor:not-allowed') + '">' +
+    '<span class="material-symbols-outlined" style="font-size:18px">done_all</span>' +
+    (v.rangeUnpaidCount ? 'Mark All Paid in Range (' + v.rangeUnpaidCount + ')' : 'All paid in range') +
+    '</button>';
 
   var multiWeek = v.weekChunks.length > 1;
 
@@ -887,12 +981,26 @@ function renderReportTab(v) {
     }
   });
 
+  html += '' +
+    '<div style="margin-top:28px;padding-top:16px;border-top:1px solid oklch(0.9 0.005 95)">' +
+    '<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:13px;color:oklch(0.22 0.01 95);margin-bottom:2px">Backup</div>' +
+    '<div style="font-size:11px;color:oklch(0.55 0.01 95);margin-bottom:10px">All your data lives only on this device. Export a backup now and then so a lost or reset phone can\'t wipe out your orders.</div>' +
+    '<div style="display:flex;gap:8px">' +
+    '<button data-action="export-backup" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:11px;border:1px solid oklch(0.85 0.005 95);border-radius:12px;background:#fff;color:oklch(0.3 0.01 95);font-family:Manrope,sans-serif;font-weight:700;font-size:12.5px;cursor:pointer">' +
+    '<span class="material-symbols-outlined" style="font-size:16px">file_download</span>Export</button>' +
+    '<button data-action="import-backup" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:11px;border:1px solid oklch(0.85 0.005 95);border-radius:12px;background:#fff;color:oklch(0.3 0.01 95);font-family:Manrope,sans-serif;font-weight:700;font-size:12.5px;cursor:pointer">' +
+    '<span class="material-symbols-outlined" style="font-size:16px">file_upload</span>Import</button>' +
+    '</div></div>';
+
   document.getElementById('reportTab').innerHTML = html;
   document.getElementById('reportTab').querySelectorAll('[data-action]').forEach(function (el) {
     el.addEventListener('click', function () {
       var action = el.getAttribute('data-action');
       if (action === 'download-pdf') downloadPdf();
+      else if (action === 'mark-range-paid') markRangePaid();
       else if (action === 'toggle-week') toggleWeek(el.getAttribute('data-key'), el.getAttribute('data-expanded') === 'true');
+      else if (action === 'export-backup') exportBackup();
+      else if (action === 'import-backup') document.getElementById('importBackupInput').click();
     });
   });
   document.getElementById('reportTab').querySelectorAll('input[data-range-field]').forEach(function (input) {
@@ -952,6 +1060,10 @@ document.getElementById('tabEntryBtn').addEventListener('click', function () { s
 document.getElementById('tabReportBtn').addEventListener('click', function () { setTab('report'); });
 document.getElementById('tabUnpaidBtn').addEventListener('click', function () { setTab('unpaid'); });
 document.getElementById('appNameBtn').addEventListener('click', editTruckName);
+document.getElementById('importBackupInput').addEventListener('change', function () {
+  if (this.files && this.files[0]) importBackupFile(this.files[0]);
+  this.value = '';
+});
 
 render();
 
