@@ -100,6 +100,7 @@ input { font: inherit; }
 
     <div id="entryTab" style="padding:0 20px 20px"></div>
     <div id="reportTab" style="padding:0 20px 20px"></div>
+    <div id="unpaidTab" style="padding:0 20px 20px"></div>
   </div>
 
   <div style="display:flex;border-top:1px solid oklch(0.9 0.005 95);background:#fff;padding:10px 20px 22px;flex-shrink:0">
@@ -110,6 +111,13 @@ input { font: inherit; }
     <button id="tabReportBtn" style="display:flex;flex-direction:column;align-items:center;gap:2px;border:none;background:none;cursor:pointer;flex:1">
       <span class="material-symbols-outlined" style="font-size:23px">bar_chart_4_bars</span>
       <span style="font-size:10.5px;font-weight:700;font-family:Manrope,sans-serif">Report</span>
+    </button>
+    <button id="tabUnpaidBtn" style="display:flex;flex-direction:column;align-items:center;gap:2px;border:none;background:none;cursor:pointer;flex:1">
+      <span style="position:relative;display:inline-flex">
+        <span class="material-symbols-outlined" style="font-size:23px">money_off</span>
+        <span id="unpaidBadge" style="display:none;position:absolute;top:-4px;right:-8px;min-width:15px;height:15px;padding:0 3px;border-radius:8px;background:oklch(0.55 0.21 20);color:#fff;font-size:9px;font-weight:800;font-family:Manrope,sans-serif;align-items:center;justify-content:center;line-height:1"></span>
+      </span>
+      <span style="font-size:10.5px;font-weight:700;font-family:Manrope,sans-serif">Unpaid</span>
     </button>
   </div>
 </div>
@@ -134,8 +142,10 @@ input { font: inherit; }
 
 /* ============ Config (was editable "props" in the design tool) ============ */
 var TRUCK_NAME_KEY = 'driverTruckName_v1';
+var DISPATCH_EMAIL_KEY = 'driverDispatchEmail_v1';
 var PROPS = {
   appName: window.localStorage.getItem(TRUCK_NAME_KEY) || 'My Truck',
+  dispatchEmail: window.localStorage.getItem(DISPATCH_EMAIL_KEY) || '',
 };
 
 function editTruckName() {
@@ -145,6 +155,15 @@ function editTruckName() {
   if (!next) return;
   PROPS.appName = next;
   try { window.localStorage.setItem(TRUCK_NAME_KEY, next); } catch (e) {}
+  render();
+}
+
+function editDispatchEmail() {
+  var next = window.prompt('Dispatch email address (used by "Email Missing Orders"):', PROPS.dispatchEmail);
+  if (next === null) return;
+  next = next.trim();
+  PROPS.dispatchEmail = next;
+  try { window.localStorage.setItem(DISPATCH_EMAIL_KEY, next); } catch (e) {}
   render();
 }
 
@@ -163,6 +182,7 @@ var FIELDS = [
 ];
 var ACCENT = 'oklch(0.4 0.08 155)';
 var ACCENT2 = 'oklch(0.35 0.05 55)';
+var UNPAID_ACCENT = 'oklch(0.55 0.21 20)';
 var MUTED = 'oklch(0.62 0.01 95)';
 var STORAGE_KEY = 'driverOrderEntries_v1';
 
@@ -183,6 +203,7 @@ function emptyForm() {
   var o = {};
   FIELDS.forEach(function (f) { o[f.key] = ''; });
   o.date = todayISO();
+  o.paid = false;
   return o;
 }
 function formatDateLabel(iso) {
@@ -290,7 +311,10 @@ var state = {
 (function loadEntries() {
   try {
     var raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) state.entries = JSON.parse(raw);
+    if (raw) {
+      // Older saved entries predate the paid/unpaid field — default them to unpaid.
+      state.entries = JSON.parse(raw).map(function (e) { return Object.assign({ paid: false }, e); });
+    }
   } catch (e) {}
 })();
 
@@ -361,6 +385,26 @@ function shareEntry(id) {
   } else {
     window.location.href = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
   }
+}
+
+function togglePaid(id) {
+  var entries = state.entries.map(function (e) {
+    return e.id === id ? Object.assign({}, e, { paid: !e.paid }) : e;
+  });
+  persist(entries);
+  state.entries = entries;
+  render();
+}
+
+function emailMissingOrders() {
+  var v = computeVals();
+  if (!v.unpaidCards.length) { window.alert('No unpaid orders to report.'); return; }
+  var subject = 'Missing Orders — ' + PROPS.appName + ' (' + v.unpaidCards.length + ')';
+  var lines = v.unpaidCards.map(function (c) {
+    return '- ' + c.orderNumber + '  |  ' + c.dateLabel + '  |  ' + c.customerName;
+  });
+  var body = 'Missing / unpaid orders as of ' + formatDateLabel(todayISO()) + ':\n\n' + lines.join('\n');
+  window.location.href = 'mailto:' + (PROPS.dispatchEmail || '') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
 }
 
 function deleteEntry(id) {
@@ -478,9 +522,14 @@ function computeVals() {
       orderNumber: e.orderNumber || '—',
       customerName: e.customerName || '—',
       dateLabel: formatDateLabel(e.date),
+      paid: !!e.paid,
       details: detailKeys.map(function (f) { return { icon: f.icon, label: f.label, value: e[f.key] || '—', section: f.section }; }),
     };
   });
+
+  var unpaidCards = entryCards.filter(function (c) { return !c.paid; })
+    .slice()
+    .sort(function (a, b) { return (a.dateISO || '').localeCompare(b.dateISO || ''); });
 
   var searchTerm = (s.search || '').trim();
   var searchActive = !!searchTerm;
@@ -524,6 +573,7 @@ function computeVals() {
           containerNumber: e.containerNumber || '—',
           pickupLocation: e.pickupLocation || '—',
           containerDropLocation: e.containerDropLocation || '—',
+          paid: !!e.paid,
         };
       }),
     };
@@ -539,6 +589,7 @@ function computeVals() {
   return {
     isEntryTab: s.tab === 'entry',
     isReportTab: s.tab === 'report',
+    isUnpaidTab: s.tab === 'unpaid',
     fields: fields,
     isEditing: !!s.editingId,
     entryCards: entryCards,
@@ -547,6 +598,9 @@ function computeVals() {
     searchTerm: s.search || '',
     searchActive: searchActive,
     searchResults: searchResults,
+    unpaidCards: unpaidCards,
+    unpaidCount: unpaidCards.length,
+    dispatchEmail: PROPS.dispatchEmail,
     rangeStartInput: s.rangeStart,
     rangeEndInput: s.rangeEnd,
     rangeLabel: range.label,
@@ -566,15 +620,102 @@ function render() {
 
   document.getElementById('tabEntryBtn').style.color = v.isEntryTab ? ACCENT : MUTED;
   document.getElementById('tabReportBtn').style.color = v.isReportTab ? ACCENT2 : MUTED;
+  document.getElementById('tabUnpaidBtn').style.color = v.isUnpaidTab ? UNPAID_ACCENT : MUTED;
   document.querySelector('#tabEntryBtn .material-symbols-outlined').style.fontVariationSettings = "'FILL' " + (v.isEntryTab ? 1 : 0) + ",'wght' 500";
   document.querySelector('#tabReportBtn .material-symbols-outlined').style.fontVariationSettings = "'FILL' " + (v.isReportTab ? 1 : 0) + ",'wght' 500";
+  document.querySelector('#tabUnpaidBtn .material-symbols-outlined').style.fontVariationSettings = "'FILL' " + (v.isUnpaidTab ? 1 : 0) + ",'wght' 500";
+
+  var unpaidBadge = document.getElementById('unpaidBadge');
+  unpaidBadge.textContent = v.unpaidCount;
+  unpaidBadge.style.display = v.unpaidCount > 0 ? 'flex' : 'none';
 
   document.getElementById('entryTab').style.display = v.isEntryTab ? '' : 'none';
   document.getElementById('reportTab').style.display = v.isReportTab ? '' : 'none';
+  document.getElementById('unpaidTab').style.display = v.isUnpaidTab ? '' : 'none';
 
   if (v.isEntryTab) renderEntryTab(v);
   if (v.isReportTab) renderReportTab(v);
+  if (v.isUnpaidTab) renderUnpaidTab(v);
   renderPrintReport(v);
+}
+
+function entryCardHtml(card) {
+  var statusPaid = !!card.paid;
+  var statusColor = statusPaid ? 'oklch(0.42 0.09 155)' : UNPAID_ACCENT;
+  var statusBg = statusPaid ? 'oklch(0.94 0.03 155)' : 'oklch(0.94 0.07 20)';
+  var statusIcon = statusPaid ? 'check_circle' : 'error';
+  var statusLabel = statusPaid ? 'Paid' : 'Unpaid';
+
+  var out = '' +
+    '<div style="background:#fff;border:1px solid oklch(0.9 0.005 95);border-radius:14px;padding:14px;margin-bottom:10px">' +
+    '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;gap:8px">' +
+    '<div style="min-width:0">' +
+    '<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:14.5px;color:oklch(0.22 0.01 95)">' + esc(card.orderNumber) + '</div>' +
+    '<div style="font-size:12px;color:oklch(0.5 0.01 95);margin-top:1px">' + esc(card.customerName) + ' · ' + esc(card.dateLabel) + '</div>' +
+    '</div>' +
+    '<div style="display:flex;gap:6px;flex-shrink:0">' +
+    '<button data-action="toggle-paid" data-id="' + esc(card.id) + '" title="Mark as ' + (statusPaid ? 'unpaid' : 'paid') + '" style="display:flex;align-items:center;gap:4px;height:30px;border-radius:9px;border:none;background:' + statusBg + ';padding:0 9px;cursor:pointer">' +
+    '<span class="material-symbols-outlined" style="font-size:15px;color:' + statusColor + '">' + statusIcon + '</span>' +
+    '<span style="font-size:11px;font-weight:700;color:' + statusColor + ';font-family:Manrope,sans-serif;white-space:nowrap">' + statusLabel + '</span>' +
+    '</button>' +
+    '<button data-action="share-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.93 0.05 240);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
+    '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.45 0.1 240)">ios_share</span></button>' +
+    '<button data-action="edit-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.93 0.07 95);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
+    '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.4 0.08 155)">edit</span></button>' +
+    '<button data-action="delete-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.94 0.07 20);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
+    '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.55 0.21 20)">delete</span></button>' +
+    '</div></div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;padding-top:8px;border-top:1px solid oklch(0.94 0.004 95)">';
+  card.details.forEach(function (d) {
+    var dsc = sectionColor(d.section);
+    out += '' +
+      '<div style="display:flex;align-items:flex-start;gap:6px;min-width:0">' +
+      '<span class="material-symbols-outlined" style="font-size:14px;color:' + dsc.base + ';margin-top:1px;flex-shrink:0">' + esc(d.icon) + '</span>' +
+      '<div style="min-width:0"><div style="font-size:9.5px;color:oklch(0.6 0.01 95)">' + esc(d.label) + '</div>' +
+      '<div style="font-size:12px;color:oklch(0.3 0.01 95);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(d.value) + '</div></div></div>';
+  });
+  out += '</div></div>';
+  return out;
+}
+
+function renderUnpaidTab(v) {
+  var html = '' +
+    '<div style="margin-bottom:14px">' +
+    '<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:16px;color:oklch(0.22 0.01 95)">Unpaid Orders</div>' +
+    '<div style="font-size:11.5px;color:oklch(0.55 0.01 95);margin-top:1px">' + v.unpaidCount + ' order' + (v.unpaidCount === 1 ? '' : 's') + ' waiting on settlement</div>' +
+    '</div>';
+
+  html += '' +
+    '<button data-action="edit-dispatch-email" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;background:#fff;border:1px solid oklch(0.9 0.005 95);border-radius:12px;padding:10px 12px;margin-bottom:10px;cursor:pointer;text-align:left">' +
+    '<div style="min-width:0">' +
+    '<div style="font-size:10px;color:oklch(0.55 0.01 95)">Dispatch email</div>' +
+    '<div style="font-size:13px;color:oklch(0.22 0.01 95);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(v.dispatchEmail || 'Tap to set dispatch email') + '</div>' +
+    '</div>' +
+    '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.55 0.01 95);flex-shrink:0">edit</span>' +
+    '</button>';
+
+  html += '' +
+    '<button data-action="email-missing" style="width:100%;padding:13px;border:none;border-radius:14px;background:' + (v.unpaidCount ? UNPAID_ACCENT : 'oklch(0.85 0.01 95)') + ';color:#fff;font-family:Manrope,sans-serif;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:18px;' + (v.unpaidCount ? 'cursor:pointer' : 'cursor:not-allowed') + '">' +
+    '<span class="material-symbols-outlined" style="font-size:18px">forward_to_inbox</span>Email Missing Orders (' + v.unpaidCount + ')</button>';
+
+  if (v.unpaidCards.length) {
+    v.unpaidCards.forEach(function (card) { html += entryCardHtml(card); });
+  } else {
+    html += '<div style="text-align:center;padding:30px 10px;color:oklch(0.6 0.01 95);font-size:13px">All caught up — no unpaid orders.</div>';
+  }
+
+  document.getElementById('unpaidTab').innerHTML = html;
+  document.getElementById('unpaidTab').querySelectorAll('[data-action]').forEach(function (el) {
+    el.addEventListener('click', function () {
+      var action = el.getAttribute('data-action');
+      if (action === 'toggle-paid') togglePaid(el.getAttribute('data-id'));
+      else if (action === 'share-entry') shareEntry(el.getAttribute('data-id'));
+      else if (action === 'edit-entry') editEntry(el.getAttribute('data-id'));
+      else if (action === 'delete-entry') deleteEntry(el.getAttribute('data-id'));
+      else if (action === 'edit-dispatch-email') editDispatchEmail();
+      else if (action === 'email-missing') emailMissingOrders();
+    });
+  });
 }
 
 function renderEntryTab(v) {
@@ -623,38 +764,10 @@ function renderEntryTab(v) {
     (v.searchTerm ? '<button data-action="clear-search" style="border:none;background:none;padding:0;cursor:pointer;display:flex;align-items:center;flex-shrink:0"><span class="material-symbols-outlined" style="font-size:18px;color:oklch(0.55 0.01 95)">close</span></button>' : '') +
     '</div>';
 
-  function renderEntryCard(card) {
-    html += '' +
-      '<div style="background:#fff;border:1px solid oklch(0.9 0.005 95);border-radius:14px;padding:14px;margin-bottom:10px">' +
-      '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;gap:8px">' +
-      '<div style="min-width:0">' +
-      '<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:14.5px;color:oklch(0.22 0.01 95)">' + esc(card.orderNumber) + '</div>' +
-      '<div style="font-size:12px;color:oklch(0.5 0.01 95);margin-top:1px">' + esc(card.customerName) + ' · ' + esc(card.dateLabel) + '</div>' +
-      '</div>' +
-      '<div style="display:flex;gap:6px;flex-shrink:0">' +
-      '<button data-action="share-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.93 0.05 240);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
-      '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.45 0.1 240)">ios_share</span></button>' +
-      '<button data-action="edit-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.93 0.07 95);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
-      '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.4 0.08 155)">edit</span></button>' +
-      '<button data-action="delete-entry" data-id="' + esc(card.id) + '" style="width:30px;height:30px;border-radius:9px;border:none;background:oklch(0.94 0.07 20);display:flex;align-items:center;justify-content:center;cursor:pointer">' +
-      '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.55 0.21 20)">delete</span></button>' +
-      '</div></div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;padding-top:8px;border-top:1px solid oklch(0.94 0.004 95)">';
-    card.details.forEach(function (d) {
-      var dsc = sectionColor(d.section);
-      html += '' +
-        '<div style="display:flex;align-items:flex-start;gap:6px;min-width:0">' +
-        '<span class="material-symbols-outlined" style="font-size:14px;color:' + dsc.base + ';margin-top:1px;flex-shrink:0">' + esc(d.icon) + '</span>' +
-        '<div style="min-width:0"><div style="font-size:9.5px;color:oklch(0.6 0.01 95)">' + esc(d.label) + '</div>' +
-        '<div style="font-size:12px;color:oklch(0.3 0.01 95);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(d.value) + '</div></div></div>';
-    });
-    html += '</div></div>';
-  }
-
   if (v.searchActive) {
     if (v.searchResults.length) {
       html += '<div style="font-size:11.5px;color:oklch(0.55 0.01 95);margin-bottom:8px">' + v.searchResults.length + ' match' + (v.searchResults.length === 1 ? '' : 'es') + ' for "' + esc(v.searchTerm) + '"</div>';
-      v.searchResults.forEach(renderEntryCard);
+      v.searchResults.forEach(function (card) { html += entryCardHtml(card); });
     } else {
       html += '<div style="text-align:center;padding:30px 10px;color:oklch(0.6 0.01 95);font-size:13px">No orders match "' + esc(v.searchTerm) + '".</div>';
     }
@@ -673,7 +786,7 @@ function renderEntryTab(v) {
           '</button>';
       }
       if (week.expanded) {
-        week.cards.forEach(renderEntryCard);
+        week.cards.forEach(function (card) { html += entryCardHtml(card); });
       }
     });
   } else {
@@ -696,6 +809,7 @@ function renderEntryTab(v) {
       else if (action === 'share-entry') shareEntry(el.getAttribute('data-id'));
       else if (action === 'toggle-entry-week') toggleEntryWeek(el.getAttribute('data-key'), el.getAttribute('data-expanded') === 'true');
       else if (action === 'clear-search') setSearch('');
+      else if (action === 'toggle-paid') togglePaid(el.getAttribute('data-id'));
     });
   });
 
@@ -743,8 +857,10 @@ function renderReportTab(v) {
       grp.entries.forEach(function (e) {
         html += '' +
           '<div style="background:#fff;border:1px solid oklch(0.92 0.004 95);border-radius:11px;padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+          '<div style="min-width:0;display:flex;align-items:center;gap:6px">' +
+          '<span title="' + (e.paid ? 'Paid' : 'Unpaid') + '" style="width:7px;height:7px;border-radius:50%;flex-shrink:0;background:' + (e.paid ? 'oklch(0.55 0.15 155)' : UNPAID_ACCENT) + '"></span>' +
           '<div style="min-width:0"><div style="font-size:13px;font-weight:700;color:oklch(0.22 0.01 95)">' + esc(e.orderNumber) + '</div>' +
-          '<div style="font-size:11px;color:oklch(0.55 0.01 95)">' + esc(e.customerName) + '</div></div>' +
+          '<div style="font-size:11px;color:oklch(0.55 0.01 95)">' + esc(e.customerName) + '</div></div></div>' +
           '<div style="font-size:10.5px;color:oklch(0.55 0.01 95);text-align:right;flex-shrink:0">' +
           '<div>Chassis ' + esc(e.chassisNumber) + '</div><div>Cntr ' + esc(e.containerNumber) + '</div></div></div>';
       });
@@ -834,6 +950,7 @@ function renderPrintReport(v) {
 
 document.getElementById('tabEntryBtn').addEventListener('click', function () { setTab('entry'); });
 document.getElementById('tabReportBtn').addEventListener('click', function () { setTab('report'); });
+document.getElementById('tabUnpaidBtn').addEventListener('click', function () { setTab('unpaid'); });
 document.getElementById('appNameBtn').addEventListener('click', editTruckName);
 
 render();
