@@ -191,6 +191,8 @@ var FIELDS = [
 var ACCENT = 'oklch(0.4 0.08 155)';
 var ACCENT2 = 'oklch(0.35 0.05 55)';
 var UNPAID_ACCENT = 'oklch(0.55 0.21 20)';
+var OVERDUE_ACCENT = 'oklch(0.4 0.19 25)';
+var AGING_WARNING_DAYS = 14; // unpaid past this many days gets flagged as overdue
 var MUTED = 'oklch(0.62 0.01 95)';
 var STORAGE_KEY = 'driverOrderEntries_v1';
 
@@ -207,6 +209,12 @@ function sectionColor(section) { return SECTION_COLORS[section] || DEFAULT_SECTI
 function pad2(n) { return n < 10 ? '0' + n : '' + n; }
 function toISO(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
 function todayISO() { return toISO(new Date()); }
+function daysBetween(startISO, endISO) {
+  var start = new Date(startISO + 'T00:00:00');
+  var end = new Date(endISO + 'T00:00:00');
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+  return Math.max(0, Math.round((end - start) / 86400000));
+}
 function emptyForm() {
   var o = {};
   FIELDS.forEach(function (f) { o[f.key] = ''; });
@@ -432,7 +440,8 @@ function emailMissingOrders() {
   if (!v.unpaidCards.length) { window.alert('No unpaid orders to report.'); return; }
   var subject = 'Missing Orders — ' + PROPS.appName + ' (' + v.unpaidCards.length + ')';
   var lines = v.unpaidCards.map(function (c) {
-    return '- ' + c.orderNumber + '  |  ' + c.dateLabel + '  |  ' + c.customerName;
+    var ageTag = c.daysUnpaid >= AGING_WARNING_DAYS ? '  [OVERDUE ' + c.daysUnpaid + 'd]' : (c.daysUnpaid > 0 ? '  (' + c.daysUnpaid + 'd)' : '');
+    return '- ' + c.orderNumber + '  |  ' + c.dateLabel + '  |  ' + c.customerName + ageTag;
   });
   var body = 'Missing / unpaid orders as of ' + formatDateLabel(todayISO()) + ':\n\n' + lines.join('\n');
   window.location.href = 'mailto:' + (PROPS.dispatchEmail || '') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
@@ -611,6 +620,7 @@ function computeVals() {
       customerName: e.customerName || '—',
       dateLabel: formatDateLabel(e.date),
       paid: !!e.paid,
+      daysUnpaid: e.date ? daysBetween(e.date, todayISO()) : 0,
       details: detailKeys.map(function (f) { return { icon: f.icon, label: f.label, value: e[f.key] || '—', section: f.section }; }),
     };
   });
@@ -618,6 +628,7 @@ function computeVals() {
   var unpaidCards = entryCards.filter(function (c) { return !c.paid; })
     .slice()
     .sort(function (a, b) { return (a.dateISO || '').localeCompare(b.dateISO || ''); });
+  var overdueCount = unpaidCards.filter(function (c) { return c.daysUnpaid >= AGING_WARNING_DAYS; }).length;
 
   var searchTerm = (s.search || '').trim();
   var searchActive = !!searchTerm;
@@ -689,6 +700,7 @@ function computeVals() {
     searchResults: searchResults,
     unpaidCards: unpaidCards,
     unpaidCount: unpaidCards.length,
+    overdueCount: overdueCount,
     dispatchEmail: PROPS.dispatchEmail,
     rangeStartInput: s.rangeStart,
     rangeEndInput: s.rangeEnd,
@@ -716,7 +728,8 @@ function render() {
   document.querySelector('#tabUnpaidBtn .material-symbols-outlined').style.fontVariationSettings = "'FILL' " + (v.isUnpaidTab ? 1 : 0) + ",'wght' 500";
 
   var unpaidBadge = document.getElementById('unpaidBadge');
-  unpaidBadge.textContent = v.unpaidCount;
+  unpaidBadge.textContent = v.unpaidCount + (v.overdueCount ? '!' : '');
+  unpaidBadge.style.background = v.overdueCount ? OVERDUE_ACCENT : UNPAID_ACCENT;
   unpaidBadge.style.display = v.unpaidCount > 0 ? 'flex' : 'none';
 
   document.getElementById('entryTab').style.display = v.isEntryTab ? '' : 'none';
@@ -731,10 +744,12 @@ function render() {
 
 function entryCardHtml(card) {
   var statusPaid = !!card.paid;
-  var statusColor = statusPaid ? 'oklch(0.42 0.09 155)' : UNPAID_ACCENT;
-  var statusBg = statusPaid ? 'oklch(0.94 0.03 155)' : 'oklch(0.94 0.07 20)';
-  var statusIcon = statusPaid ? 'check_circle' : 'error';
-  var statusLabel = statusPaid ? 'Paid' : 'Unpaid';
+  var daysUnpaid = card.daysUnpaid || 0;
+  var isOverdue = !statusPaid && daysUnpaid >= AGING_WARNING_DAYS;
+  var statusColor = statusPaid ? 'oklch(0.42 0.09 155)' : (isOverdue ? OVERDUE_ACCENT : UNPAID_ACCENT);
+  var statusBg = statusPaid ? 'oklch(0.94 0.03 155)' : (isOverdue ? 'oklch(0.92 0.08 25)' : 'oklch(0.94 0.07 20)');
+  var statusIcon = statusPaid ? 'check_circle' : (isOverdue ? 'report' : 'error');
+  var statusLabel = statusPaid ? 'Paid' : (isOverdue ? 'Overdue · ' + daysUnpaid + 'd' : (daysUnpaid > 0 ? 'Unpaid · ' + daysUnpaid + 'd' : 'Unpaid'));
 
   var out = '' +
     '<div style="background:#fff;border:1px solid oklch(0.9 0.005 95);border-radius:14px;padding:14px;margin-bottom:10px">' +
@@ -744,7 +759,7 @@ function entryCardHtml(card) {
     '<div style="font-size:12px;color:oklch(0.5 0.01 95);margin-top:1px">' + esc(card.customerName) + ' · ' + esc(card.dateLabel) + '</div>' +
     '</div>' +
     '<div style="display:flex;gap:6px;flex-shrink:0">' +
-    '<button data-action="toggle-paid" data-id="' + esc(card.id) + '" title="Mark as ' + (statusPaid ? 'unpaid' : 'paid') + '" style="display:flex;align-items:center;gap:4px;height:30px;border-radius:9px;border:none;background:' + statusBg + ';padding:0 9px;cursor:pointer">' +
+    '<button data-action="toggle-paid" data-id="' + esc(card.id) + '" title="Mark as ' + (statusPaid ? 'unpaid' : 'paid') + '" style="display:flex;align-items:center;gap:4px;height:30px;border-radius:9px;border:' + (isOverdue ? '1.5px solid ' + OVERDUE_ACCENT : 'none') + ';background:' + statusBg + ';padding:0 9px;cursor:pointer">' +
     '<span class="material-symbols-outlined" style="font-size:15px;color:' + statusColor + '">' + statusIcon + '</span>' +
     '<span style="font-size:11px;font-weight:700;color:' + statusColor + ';font-family:Manrope,sans-serif;white-space:nowrap">' + statusLabel + '</span>' +
     '</button>' +
@@ -772,7 +787,7 @@ function renderUnpaidTab(v) {
   var html = '' +
     '<div style="margin-bottom:14px">' +
     '<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:16px;color:oklch(0.22 0.01 95)">Unpaid Orders</div>' +
-    '<div style="font-size:11.5px;color:oklch(0.55 0.01 95);margin-top:1px">' + v.unpaidCount + ' order' + (v.unpaidCount === 1 ? '' : 's') + ' waiting on settlement</div>' +
+    '<div style="font-size:11.5px;color:' + (v.overdueCount ? OVERDUE_ACCENT : 'oklch(0.55 0.01 95)') + ';margin-top:1px;font-weight:' + (v.overdueCount ? '700' : '400') + '">' + v.unpaidCount + ' order' + (v.unpaidCount === 1 ? '' : 's') + ' waiting on settlement' + (v.overdueCount ? ' · ' + v.overdueCount + ' overdue (' + AGING_WARNING_DAYS + '+ days)' : '') + '</div>' +
     '</div>';
 
   html += '' +
