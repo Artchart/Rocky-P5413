@@ -523,6 +523,7 @@ function reconcileWithSettlement(file) {
         rangeLabel: range.label,
         settlementCount: settlementOrders.length,
         matchedCount: matched.length,
+        matched: matched,
         missingFromApp: missingFromApp,
         missingFromSettlement: missingFromSettlement,
       };
@@ -1092,6 +1093,14 @@ function renderReportTab(v) {
       '<div style="flex:1;text-align:center;padding:8px 4px;background:' + (r.missingFromSettlement.length ? 'oklch(0.96 0.05 20)' : 'oklch(0.95 0.006 95)') + ';border-radius:10px"><div style="font-weight:800;font-size:16px;color:' + (r.missingFromSettlement.length ? 'oklch(0.55 0.18 20)' : 'oklch(0.6 0.01 95)') + '">' + r.missingFromSettlement.length + '</div><div style="font-size:9px;color:oklch(0.55 0.01 95)">Not Paid</div></div>' +
       '</div>';
 
+    if (r.matched.length) {
+      html += '<div style="font-size:11px;font-weight:700;color:oklch(0.4 0.1 155);margin-bottom:6px">Matched loads</div><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">';
+      r.matched.forEach(function (o) {
+        html += '<span style="padding:6px 10px;border-radius:20px;border:1px solid oklch(0.8 0.09 155);background:oklch(0.95 0.03 155);color:oklch(0.35 0.1 155);font-size:12px;font-weight:700">✓ ' + esc(o) + '</span>';
+      });
+      html += '</div>';
+    }
+
     if (r.missingFromApp.length) {
       html += '<div style="font-size:11px;font-weight:700;color:oklch(0.5 0.15 55);margin-bottom:6px">On settlement, not in your log — tap to add</div><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">';
       r.missingFromApp.forEach(function (o) {
@@ -1125,6 +1134,15 @@ function renderReportTab(v) {
 
   var multiWeek = v.weekChunks.length > 1;
 
+  // If a settlement check was just run for this exact range, highlight the
+  // matching load cards below in green so a match is visible while scrolling
+  // the week, not just in the chip list above.
+  var reconcileMatchSet = null;
+  if (state.reconcile && state.reconcile.rangeLabel === v.rangeLabel) {
+    reconcileMatchSet = {};
+    state.reconcile.matched.forEach(function (o) { reconcileMatchSet[o] = true; });
+  }
+
   function renderDayGroup(grp) {
     html += '' +
       '<div style="margin-bottom:14px">' +
@@ -1136,11 +1154,13 @@ function renderReportTab(v) {
       '</div>';
     if (grp.entries.length) {
       grp.entries.forEach(function (e) {
+        var isMatched = reconcileMatchSet && reconcileMatchSet[(e.orderNumber || '').trim().toUpperCase()];
         html += '' +
-          '<div style="background:#fff;border:1px solid oklch(0.92 0.004 95);border-radius:11px;padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+          '<div style="background:' + (isMatched ? 'oklch(0.98 0.015 155)' : '#fff') + ';border:1px solid ' + (isMatched ? 'oklch(0.82 0.08 155)' : 'oklch(0.92 0.004 95)') + ';border-radius:11px;padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px">' +
           '<div style="min-width:0;display:flex;align-items:center;gap:6px">' +
           '<span title="' + (e.paid ? 'Paid' : 'Unpaid') + '" style="width:7px;height:7px;border-radius:50%;flex-shrink:0;background:' + (e.paid ? 'oklch(0.55 0.15 155)' : UNPAID_ACCENT) + '"></span>' +
-          '<div style="min-width:0"><div style="font-size:13px;font-weight:700;color:oklch(0.22 0.01 95)">' + esc(e.orderNumber) + '</div>' +
+          '<div style="min-width:0"><div style="font-size:13px;font-weight:700;color:oklch(0.22 0.01 95);display:flex;align-items:center;gap:5px">' + esc(e.orderNumber) +
+          (isMatched ? '<span title="On this settlement" class="material-symbols-outlined" style="font-size:14px;color:oklch(0.5 0.15 155)">check_circle</span>' : '') + '</div>' +
           '<div style="font-size:11px;color:oklch(0.55 0.01 95)">' + esc(e.customerName) + '</div></div></div>' +
           '<div style="font-size:10.5px;color:oklch(0.55 0.01 95);text-align:right;flex-shrink:0">' +
           '<div>Chassis ' + esc(e.chassisNumber) + '</div><div>Cntr ' + esc(e.containerNumber) + '</div></div></div>';
