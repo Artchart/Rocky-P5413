@@ -83,6 +83,7 @@ input { font: inherit; }
 </style>
 <script src="vendor/jspdf.umd.min.js"></script>
 <script src="vendor/jspdf.plugin.autotable.min.js"></script>
+<script src="vendor/pdf.min.js"></script>
 </head>
 <body>
 
@@ -129,6 +130,7 @@ input { font: inherit; }
 </div>
 
 <input type="file" id="importBackupInput" accept="application/json,.json" style="display:none">
+<input type="file" id="settlementFileInput" accept="application/pdf,.pdf" style="display:none">
 
 <div class="print-report" id="printReport">
   <div style="font-family:Manrope,sans-serif;padding:40px 50px;color:oklch(0.2 0.01 95)">
@@ -147,6 +149,10 @@ input { font: inherit; }
 
 <script>
 'use strict';
+
+if (window.pdfjsLib) {
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
+}
 
 /* ============ Config (was editable "props" in the design tool) ============ */
 var TRUCK_NAME_KEY = 'driverTruckName_v1';
@@ -331,6 +337,9 @@ var state = {
   rangeEnd: defaultRange().end,
   expandedWeekKeys: {}, // report-tab week chunk key -> true/false override; unset = default (last chunk open, earlier ones collapsed)
   expandedEntryWeeks: {}, // home-tab saved-entries week key -> true/false override; unset = default (current/future open, past collapsed)
+  reconcile: null, // { fileName, rangeLabel, matched, missingFromApp, missingFromSettlement } | null — see reconcileWithSettlement()
+  reconcileLoading: false,
+  reconcileError: null,
 };
 
 (function loadEntries() {
@@ -432,6 +441,114 @@ function markRangePaid() {
   });
   persist(entries);
   state.entries = entries;
+  render();
+}
+
+// Load numbers on the settlement sheet look like "P6731914" (P + 6-8 digits) — long
+// enough that the truck number itself (e.g. "P5413", only 4 digits) never matches,
+// so no need to special-case stripping the "Tractor #" line out of the scanned text.
+function extractOrderNumbersFromText(text) {
+  var matches = text.match(/\bP\d{6,8}\b/g) || [];
+  var seen = {};
+  var out = [];
+  matches.forEach(function (m) {
+    var key = m.toUpperCase();
+    if (!seen[key]) { seen[key] = true; out.push(key); }
+  });
+  return out;
+}
+
+function clearReconcile() {
+  state.reconcile = null;
+  state.reconcileError = null;
+  render();
+}
+
+// Compares load numbers scanned from an uploaded settlement PDF against orders
+// logged in the app for the currently selected report date range — surfaces loads
+// the driver got paid for but never logged, and logged orders missing from this
+// settlement (not yet paid, or a discrepancy worth flagging to dispatch).
+function reconcileWithSettlement(file) {
+  if (!window.pdfjsLib) {
+    state.reconcileError = 'PDF support is still loading — wait a second and try again.';
+    render();
+    return;
+  }
+  state.reconcileLoading = true;
+  state.reconcileError = null;
+  state.reconcile = null;
+  render();
+
+  var reader = new FileReader();
+  reader.onload = function () {
+    var loadingTask = window.pdfjsLib.getDocument({ data: new Uint8Array(reader.result) });
+    loadingTask.promise.then(function (pdf) {
+      var pageTexts = [];
+      for (var i = 1; i <= pdf.numPages; i++) {
+        pageTexts.push(pdf.getPage(i).then(function (page) {
+          return page.getTextContent().then(function (content) {
+            return content.items.map(function (item) { return item.str; }).join(' ');
+          });
+        }));
+      }
+      return Promise.all(pageTexts).then(function (texts) { return texts.join('\n'); });
+    }).then(function (fullText) {
+      var settlementOrders = extractOrderNumbersFromText(fullText);
+      if (!settlementOrders.length) {
+        state.reconcileError = "Couldn't find any load numbers in that PDF — make sure it's the settlement sheet.";
+        state.reconcileLoading = false;
+        render();
+        return;
+      }
+
+      var range = buildDateRange(state.rangeStart, state.rangeEnd);
+      var appEntriesByOrder = {};
+      state.entries.forEach(function (e) {
+        if (!e.date || e.date < range.startISO || e.date > range.endISO) return;
+        var key = (e.orderNumber || '').trim().toUpperCase();
+        if (key) appEntriesByOrder[key] = e;
+      });
+      var settlementSet = {};
+      settlementOrders.forEach(function (o) { settlementSet[o] = true; });
+
+      var matched = settlementOrders.filter(function (o) { return !!appEntriesByOrder[o]; });
+      var missingFromApp = settlementOrders.filter(function (o) { return !appEntriesByOrder[o]; });
+      var missingFromSettlement = Object.keys(appEntriesByOrder)
+        .filter(function (o) { return !settlementSet[o]; })
+        .map(function (o) { return appEntriesByOrder[o]; })
+        .sort(function (a, b) { return (a.date || '').localeCompare(b.date || ''); });
+
+      state.reconcile = {
+        fileName: file.name,
+        rangeLabel: range.label,
+        settlementCount: settlementOrders.length,
+        matchedCount: matched.length,
+        missingFromApp: missingFromApp,
+        missingFromSettlement: missingFromSettlement,
+      };
+      state.reconcileLoading = false;
+      render();
+    }).catch(function (err) {
+      state.reconcileError = 'Could not read that PDF (' + (err && err.message ? err.message : 'unknown error') + ').';
+      state.reconcileLoading = false;
+      render();
+    });
+  };
+  reader.onerror = function () {
+    state.reconcileError = 'Could not read that file.';
+    state.reconcileLoading = false;
+    render();
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// Quick-start a new entry from a load number found on the settlement but missing
+// from the app, so logging it takes one tap instead of re-typing the order number.
+function startEntryFromMissingOrder(orderNumber) {
+  state.form = emptyForm();
+  state.form.orderNumber = orderNumber;
+  state.editingId = null;
+  state.tab = 'entry';
   render();
 }
 
@@ -951,6 +1068,61 @@ function renderReportTab(v) {
     (v.rangeUnpaidCount ? 'Mark All Paid in Range (' + v.rangeUnpaidCount + ')' : 'All paid in range') +
     '</button>';
 
+  html += '' +
+    '<div style="background:#fff;border:1px solid oklch(0.9 0.005 95);border-radius:14px;padding:14px;margin-bottom:18px">' +
+    '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">' +
+    '<span class="material-symbols-outlined" style="font-size:16px;color:oklch(0.35 0.05 55)">fact_check</span>' +
+    '<div style="font-family:Manrope,sans-serif;font-weight:800;font-size:13px;color:oklch(0.22 0.01 95)">Check Settlement Sheet</div>' +
+    '</div>' +
+    '<div style="font-size:11px;color:oklch(0.55 0.01 95);margin-bottom:10px">Upload this week\'s settlement PDF to find loads you forgot to log, compared against ' + esc(v.rangeLabel) + '.</div>';
+
+  if (state.reconcileLoading) {
+    html += '<div style="text-align:center;padding:10px;font-size:12.5px;color:oklch(0.55 0.01 95)">Scanning PDF…</div>';
+  } else if (state.reconcileError) {
+    html += '' +
+      '<div style="font-size:12px;color:oklch(0.55 0.21 20);background:oklch(0.96 0.03 20);border-radius:10px;padding:10px 12px;margin-bottom:8px">' + esc(state.reconcileError) + '</div>' +
+      '<button data-action="upload-settlement" style="width:100%;padding:11px;border:1px dashed oklch(0.8 0.005 95);border-radius:12px;background:transparent;color:oklch(0.35 0.05 55);font-family:Manrope,sans-serif;font-weight:700;font-size:13px;cursor:pointer">Try Again</button>';
+  } else if (state.reconcile && state.reconcile.rangeLabel === v.rangeLabel) {
+    var r = state.reconcile;
+    html += '' +
+      '<div style="font-size:11px;color:oklch(0.55 0.01 95);margin-bottom:10px">' + esc(r.fileName) + ' · ' + r.settlementCount + ' loads found</div>' +
+      '<div style="display:flex;gap:8px;margin-bottom:14px">' +
+      '<div style="flex:1;text-align:center;padding:8px 4px;background:oklch(0.95 0.03 155);border-radius:10px"><div style="font-weight:800;font-size:16px;color:oklch(0.35 0.1 155)">' + r.matchedCount + '</div><div style="font-size:9px;color:oklch(0.5 0.05 155)">Matched</div></div>' +
+      '<div style="flex:1;text-align:center;padding:8px 4px;background:' + (r.missingFromApp.length ? 'oklch(0.96 0.07 55)' : 'oklch(0.95 0.006 95)') + ';border-radius:10px"><div style="font-weight:800;font-size:16px;color:' + (r.missingFromApp.length ? 'oklch(0.5 0.15 55)' : 'oklch(0.6 0.01 95)') + '">' + r.missingFromApp.length + '</div><div style="font-size:9px;color:oklch(0.55 0.01 95)">Not Logged</div></div>' +
+      '<div style="flex:1;text-align:center;padding:8px 4px;background:' + (r.missingFromSettlement.length ? 'oklch(0.96 0.05 20)' : 'oklch(0.95 0.006 95)') + ';border-radius:10px"><div style="font-weight:800;font-size:16px;color:' + (r.missingFromSettlement.length ? 'oklch(0.55 0.18 20)' : 'oklch(0.6 0.01 95)') + '">' + r.missingFromSettlement.length + '</div><div style="font-size:9px;color:oklch(0.55 0.01 95)">Not Paid</div></div>' +
+      '</div>';
+
+    if (r.missingFromApp.length) {
+      html += '<div style="font-size:11px;font-weight:700;color:oklch(0.5 0.15 55);margin-bottom:6px">On settlement, not in your log — tap to add</div><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">';
+      r.missingFromApp.forEach(function (o) {
+        html += '<button data-action="add-missing-order" data-order="' + esc(o) + '" style="padding:6px 10px;border-radius:20px;border:1px solid oklch(0.85 0.08 55);background:oklch(0.97 0.04 55);color:oklch(0.45 0.13 55);font-size:12px;font-weight:700;cursor:pointer">+ ' + esc(o) + '</button>';
+      });
+      html += '</div>';
+    }
+
+    if (r.missingFromSettlement.length) {
+      html += '<div style="font-size:11px;font-weight:700;color:oklch(0.55 0.18 20);margin-bottom:6px">Logged, but not on this settlement</div><div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">';
+      r.missingFromSettlement.forEach(function (e) {
+        html += '' +
+          '<div style="padding:8px 10px;background:oklch(0.97 0.02 20);border-radius:10px">' +
+          '<div style="font-size:12.5px;font-weight:700;color:oklch(0.22 0.01 95)">' + esc(e.orderNumber) + '</div>' +
+          '<div style="font-size:10.5px;color:oklch(0.55 0.01 95)">' + esc(formatDateLabel(e.date)) + ' · ' + esc(e.customerName || '—') + '</div>' +
+          '</div>';
+      });
+      html += '</div>';
+    }
+
+    if (!r.missingFromApp.length && !r.missingFromSettlement.length) {
+      html += '<div style="text-align:center;padding:8px;margin-bottom:10px;font-size:12.5px;font-weight:600;color:oklch(0.4 0.1 155)">✓ Everything matches</div>';
+    }
+
+    html += '<button data-action="upload-settlement" style="width:100%;padding:10px;border:none;border-radius:12px;background:oklch(0.95 0.006 95);color:oklch(0.4 0.01 95);font-family:Manrope,sans-serif;font-weight:700;font-size:12.5px;cursor:pointer">Check a Different Sheet</button>';
+  } else {
+    html += '<button data-action="upload-settlement" style="width:100%;padding:13px;border:1px dashed oklch(0.8 0.005 95);border-radius:12px;background:transparent;color:oklch(0.35 0.05 55);font-family:Manrope,sans-serif;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer">' +
+      '<span class="material-symbols-outlined" style="font-size:18px">upload_file</span>Upload Settlement PDF</button>';
+  }
+  html += '</div>';
+
   var multiWeek = v.weekChunks.length > 1;
 
   function renderDayGroup(grp) {
@@ -1016,6 +1188,8 @@ function renderReportTab(v) {
       else if (action === 'toggle-week') toggleWeek(el.getAttribute('data-key'), el.getAttribute('data-expanded') === 'true');
       else if (action === 'export-backup') exportBackup();
       else if (action === 'import-backup') document.getElementById('importBackupInput').click();
+      else if (action === 'upload-settlement') document.getElementById('settlementFileInput').click();
+      else if (action === 'add-missing-order') startEntryFromMissingOrder(el.getAttribute('data-order'));
     });
   });
   document.getElementById('reportTab').querySelectorAll('input[data-range-field]').forEach(function (input) {
@@ -1077,6 +1251,10 @@ document.getElementById('tabUnpaidBtn').addEventListener('click', function () { 
 document.getElementById('appNameBtn').addEventListener('click', editTruckName);
 document.getElementById('importBackupInput').addEventListener('change', function () {
   if (this.files && this.files[0]) importBackupFile(this.files[0]);
+  this.value = '';
+});
+document.getElementById('settlementFileInput').addEventListener('change', function () {
+  if (this.files && this.files[0]) reconcileWithSettlement(this.files[0]);
   this.value = '';
 });
 
